@@ -1,7 +1,8 @@
 """
 Author: Nađa
-Compute lexical surprisal and entropy using BLOOM-7b (HuggingFace).
+Compute lexical surprisal and entropy using BLOOM-7b LLM (HuggingFace).
 """
+
 # - IMPORTS ------------------------------------------------
 import wave
 import os, math
@@ -20,6 +21,15 @@ MuR_STORIES         = ["UEngA", "UEngB", "UFraA", "UFraB"]              # non-li
 STORIES             = ["AEngA","AEngB","AEngC","AEngD","UEngC","UEngD", # linguistic stimuli
                        "AFraA","AFraB","AFraC","AFraD","UFraC","UFraD"]
 
+# - load model from HuggingFace ----------------------------
+print("Loading BLOOM-7b")
+tokenizer = AutoTokenizer.from_pretrained("bigscience/bloom-7b1")
+model = AutoModelForCausalLM.from_pretrained("bigscience/bloom-7b1", dtype=torch.float32)
+model.eval()
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model  = model.to(device)
+print(f"Model loaded on {device}")
+
 # - PATHS --------------------------------------------------
 BASE        = os.path.expanduser("~/Development/mphil")
 WAV_DIR     = os.path.join(BASE, "0_speech_envelope/stimuli/")
@@ -29,15 +39,6 @@ FRA_TG_DIR  = os.path.join(BASE, "0_morphology/aligned_Fra")
 OUTPUT      = os.path.join(BASE, "0_word_surprisal_entropy/NS_word_surprisal_entropy.mat")
 
 # - HELPER FUNCTIONS ---------------------------------------
-
-# - load model from HuggingFace ----------------------------
-print("Loading BLOOM-7b")
-tokenizer = AutoTokenizer.from_pretrained("bigscience/bloom-7b1")
-model = AutoModelForCausalLM.from_pretrained("bigscience/bloom-7b1", dtype=torch.float32)
-model.eval()
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model  = model.to(device)
-print(f"Model loaded on {device}")
 
 # - helper: read TextGrid file -----------------------------
 # returns TG file
@@ -90,7 +91,6 @@ def read_textgrid_words(path):
                         words.append(label)
                         onsets.append(xmin)
     return duration, words, onsets
-
 
 # - helper: tokenize words -------------------------------------
 # returns sub-word tokens and (start, end) tuples for each word
@@ -169,15 +169,15 @@ def compute_surprisal_entropy(sentences, use_story_context=True):
 # returns time-aligned (to word onsets) valued impulse vector:
 #   col 0: surprisal
 #   col 1: entropy
-def build_vector(duration, onsets, word_surp, word_ent):
-    nSamples = max(1, int(np.ceil(duration * FS)))
-    vec = np.zeros((nSamples, 2))
+def build_vector(duration, onsets, surp, ent):
+    nSamples = int(np.ceil(duration * FS))
+    vec = np.zeros((nSamples, FEAT_DIM))
 
     for i, onset in enumerate(onsets):
         sample = int(round(onset * FS))
         if 0 <= sample < nSamples:
-            vec[sample, 0] = word_surp[i]
-            vec[sample, 1] = word_ent[i]
+            vec[sample, 0] = surp[i]
+            vec[sample, 1] = ent[i]
 
     return vec
 
@@ -188,7 +188,7 @@ vectors, files = [], []
 for story in STORIES:
     tg_dir = ENG_TG_DIR if "Eng" in story else FRA_TG_DIR
 
-    # decompose current story into sentences (one sentence per line, lowercase
+    # decompose text files into sentences (one sentence per line, lowercase
     # (except for proper nouns), no punctuation (besides for apostrophes))
     with open(os.path.join(STIMULI_DIR, story + ".txt"), encoding="utf-8") as fh:
         sentences = [l.strip() for l in fh if l.strip()]
@@ -207,7 +207,7 @@ for story in STORIES:
 
         # slice the next n_words values from the flat surprisal/entropy lists
         utt_surp = story_surp[word_idx : word_idx + n_words]
-        utt_ent  = story_ent[word_idx  : word_idx + n_words]
+        utt_ent = story_ent[word_idx : word_idx + n_words]
         word_idx += n_words
 
         vec = build_vector(duration, onsets, utt_surp, utt_ent)
@@ -246,10 +246,11 @@ for story in MuR_STORIES:
         files.append(utt_code)    
 
 # - SAVE OUTPUT MAT FILE ------------------------
+file_codes = np.array(files, dtype=object).reshape(-1, 1) # handle the 1440 x 8 chars instead of 1440 x 1 cell
+
 print("\nSaving .mat")
-file_codes = np.array(files, dtype=object).reshape(-1, 1)  # (1440×1) cell
 savemat(OUTPUT, {
-    "attended_semantic": vectors,
-    "attended_semantic_code": file_codes
+    "semantic": vectors,
+    "semantic_code": file_codes
 })
 print(f"Saved {len(vectors)} vectors to {OUTPUT}")
