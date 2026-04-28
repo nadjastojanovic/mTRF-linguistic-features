@@ -3,23 +3,22 @@
 
 % Output mat file (per participant per condition):
 %   TRF.participant_id              string
-%   TRF.condition                   string                    e.g. 'EngMuR'
-%   TRF.UsageGroup                  string                    'High' | 'Low' | 'No'
-%   TRF.timeLags                    time lags ms              [1 x N_LAGS]
-%   TRF.grouping                    band index per feature    [1 x N_FEAT]
+%   TRF.condition                   string                              e.g. 'EngMuR'
+%   TRF.UsageGroup                  string                              'High' | 'Low' | 'No'
+%   TRF.timeLags                    time lags ms                        [1 x N_LAGS]
 %
-%   TRF.full.weights                mean TRF weights          [N_FEAT x N_LAGS x N_CHANS]
-%   TRF.full.lambdas                optimal lambda per fold   [N_FOLD x 1]
-%   TRF.full.r_full                 full model r per fold     [N_FOLD x N_CHANS]
-%   TRF.full.r_full_avg             mean r across folds/chans scalar
-%   TRF.full.r_null                 null r (all cols shifted) [N_PERM x N_CHANS x N_FOLD]
-%   TRF.full.r_null_avg             mean null r               scalar
+%   TRF.full.weights                mean TRF weights                    [N_FEAT x N_LAGS x N_CHANS]
+%   TRF.full.lambdas                optimal lambdas per fold            [N_FOLD x 1]
+%   TRF.full.r_full                 full model r per fold               [N_FOLD x N_CHANS]
+%   TRF.full.r_full_avg             mean r across folds/chans           scalar
+%   TRF.full.r_null                 null r (all cols shifted)           [N_PERM x N_CHANS x N_FOLD]
+%   TRF.full.r_null_avg             mean null r                         scalar
 %
-%   TRF.(model).feat_cols           permuted column indices   [1 x N_COLS]
-%   TRF.(model).r_null              null r per perm/fold      [N_PERM x N_CHANS x N_FOLD]
-%   TRF.(model).r_null_avg          mean null r               scalar
-%   TRF.(model).r_corr              r_full - mean(r_null)     [N_FOLD x N_CHANS]
-%   TRF.(model).r_corr_avg          mean corrected r          scalar
+%   TRF.(model).feat_cols           permuted column indices             [1 x N_COLS]
+%   TRF.(model).r_null              null r per perm/fold                [N_PERM x N_CHANS x N_FOLD]
+%   TRF.(model).r_null_avg          mean null r                         scalar
+%   TRF.(model).r_corr              r_full - mean(r_null)               [N_FOLD x N_CHANS]
+%   TRF.(model).r_corr_avg          mean corrected r                    scalar
 
 clc; clear; close all;
 
@@ -40,6 +39,8 @@ TMAX        = 600;
 FS          = 100;
 N_CHANS     = 92;           % after REF removal
 N_PERM      = 10;
+LAMBDAS     = 10.^(-6:6);
+
 MuR_STORIES = {'EngA|EngB', 'FraA|FraB'};
 
 % min circular shift > longest possible time lag
@@ -57,25 +58,6 @@ P_GROUPS = struct( ...
 );
 
 P_GROUPS_NAMES = fieldnames(P_GROUPS);
-
-% condition pattern groups
-COND_MAP = containers.Map( ...
-    {'EngA|EngB','EngC|EngD','FraA|FraB','FraC|FraD'}, ...
-    {'EngMuR',   'EngSame',  'FraMuR',   'FraSame'} );
-
-%% - FEATURE BANDS --------------------------------------------------------
-
-GROUPING = zeros(1, 37);
-
-% tunes one band at a time & freezes earlier bands, so shared
-% variance is attributed to earlier-band features - order matters!!
-GROUPING([1, 5:26]) = 1;  % acoustic: env, artic
-GROUPING([2, 4, 27]) = 2; % seg/freq: phon onsets, word onsets, word freq
-GROUPING([3, 28:37]) = 3; % lexical / syntactic
-
-N_BANDS = 3;
-
-LAMBDAS = 10.^(-7:11);
 
 %% - MODELS ---------------------------------------------------------------
 
@@ -147,7 +129,7 @@ MAT_DIR = ['/Users/nadastojanovic/Development/mphil/1_mTRF/1b_mTRFready_' attn_l
 OUTPUT  = '/Users/nadastojanovic/Development/mphil/1_mTRF/3_results/';
 
 ssList = dir(fullfile(MAT_DIR, '*.mat'));
-ssList = ssList(1:2);   % uncomment when testing on a single file
+%ssList = ssList(1); % uncomment when testing on a single file
 nID = numel(ssList);
 
 fprintf('Found %d mat files for %s.\n\n', nID, attn_label);
@@ -192,7 +174,6 @@ parfor mat_i = 1:nID % requires Parallel Computing Toolbox
     TRF.condition = Cond;
     TRF.usage_group = UsageGroup;
     TRF.time_lags = LAGS;
-    TRF.feature_bands = GROUPING;
 
     %%% pre-allocate
     r_full = zeros(N_FOLD, N_CHANS);
@@ -210,33 +191,29 @@ parfor mat_i = 1:nID % requires Parallel Computing Toolbox
 
         [strain, rtrain, stest, rtest] = mTRFpartition(stimulusdata, eegdata, N_FOLD, testtrial);
 
-        %%% progressive banded lambda CV on training folds only
-        % tunes one band at a time & freezes earlier bands, so shared
-        % variance is attributed to earlier-band features - order matters!!
-
         %% full model
 
-        % mTRFcvbandedprogressive
-        cv = mTRFcrossval(strain, rtrain, FS, ...
-            MODEL_DIR, TMIN, TMAX, LAMBDAS, 'verbose', 0);
+        %%% lambda optimization
+        cv = mTRFcrossval(strain, rtrain, FS, MODEL_DIR, TMIN, TMAX, ...
+            LAMBDAS, 'zeropad', 0, 'verbose', 0);
 
-        [~, lambda_idx] = max(mean(mean(cv.r(:,:,:),3)));
+        [~, lambda_idx] = max(mean(mean(cv.r,3)));
         lambda = LAMBDAS(lambda_idx);
         fold_lambdas(fold_i) = lambda;
 
-        %%% train with banded lambdas
+        %%% train
+        model = mTRFtrain(strain, rtrain, FS, MODEL_DIR, TMIN, TMAX, ...
+            lambda, 'zeropad', 0, 'verbose', 0);
 
-        % mTRFtrainbanded
-        model = mTRFtrain(strain, rtrain, FS, MODEL_DIR, ...
-            TMIN, TMAX, lambda, 'verbose', 0);
+        %%% store model weights
+        w_sum = w_sum + model.w;
 
         %%% test
         [~, mtrftest] = mTRFpredict(stest, rtest, model, ...
             'zeropad', 0, 'verbose', 0);
 
-        %%% store per-fold, full model results
+        %%% store per-fold r values
         r_full(fold_i, :) = mtrftest.r;
-        w_sum = w_sum + model.w;
 
         %% control (null) shuffled model
         % circular shift of all feature columns in test stimdata
@@ -302,13 +279,13 @@ parfor mat_i = 1:nID % requires Parallel Computing Toolbox
 
 %% - SAVE OUTPUT MAT FILE -------------------------------------------------
 
-    save_path = fullfile(OUTPUT, ['banded_' attn_label '_' basename '.mat']);
+    save_path = fullfile(OUTPUT, [basename '.mat']);
     parsave_forward(save_path, TRF);
     fprintf('Saved: %s\n', basename);
 
 end
 
-fprintf('Forward banded mTRF modelling complete.\n');
+fprintf('Forward mTRF modelling complete.\n');
 
 %% - HELPERS --------------------------------------------------------------
 
