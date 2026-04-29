@@ -2,29 +2,38 @@
 % Forward mTRF modelling of EEG using linguistic features.
 
 % Output mat file (per participant per condition):
-%   TRF.participant_id              string
-%   TRF.condition                   string                              e.g. 'EngMuR'
-%   TRF.UsageGroup                  string                              'High' | 'Low' | 'No'
-%   TRF.timeLags                    time lags ms                        [1 x N_LAGS]
+%   TRF.participant_ID              string
+%   TRF.condition                   string                    e.g. 'EngMuR'
+%   TRF.usage_group                 string                    'High' | 'Low' | 'No'
+%   TRF.time_lags                   time lags ms              [1 x N_LAGS]
 %
-%   TRF.full.weights                mean TRF weights                    [N_FEAT x N_LAGS x N_CHANS]
-%   TRF.full.lambdas                optimal lambdas per fold            [N_FOLD x 1]
-%   TRF.full.r_full                 full model r per fold               [N_FOLD x N_CHANS]
-%   TRF.full.r_full_avg             mean r across folds/chans           scalar
-%   TRF.full.r_null                 null r (all cols shifted)           [N_PERM x N_CHANS x N_FOLD]
-%   TRF.full.r_null_avg             mean null r                         scalar
+%   ── Full model (all 37 features jointly) ──────────────────────────────────
+%   TRF.full.weights                mean TRF weights          [N_FEAT x N_LAGS x N_CHANS]
+%   TRF.full.lambdas                optimal lambda per fold   [N_FOLD x 1]
+%   TRF.full.r_full                 prediction r per fold     [N_FOLD x N_CHANS]
+%   TRF.full.r_full_avg             mean r (folds x chans)    scalar
+%   TRF.full.r_null                 null r (all cols shifted) [N_PERM x N_CHANS x N_FOLD]
+%   TRF.full.r_null_avg             mean null r               scalar
 %
-%   TRF.(model).feat_cols           permuted column indices             [1 x N_COLS]
-%   TRF.(model).r_null              null r per perm/fold                [N_PERM x N_CHANS x N_FOLD]
-%   TRF.(model).r_null_avg          mean null r                         scalar
-%   TRF.(model).r_corr              r_full - mean(r_null)               [N_FOLD x N_CHANS]
-%   TRF.(model).r_corr_avg          mean corrected r                    scalar
+%   ── Per-model permutation results (full model + circular shift) ───────────
+%   TRF.(model).feat_cols           permuted column indices   [1 x N_COLS]
+%   TRF.(model).r_null              null r per perm/fold      [N_PERM x N_CHANS x N_FOLD]
+%   TRF.(model).r_null_avg          mean null r               scalar
+%   TRF.(model).r_corr              r_full - mean(r_null)     [N_FOLD x N_CHANS]
+%   TRF.(model).r_corr_avg          mean corrected r          scalar
+%
+%   ── Individual feature models (solo model per feature) ────────────────────
+%   TRF.(feature).weights           mean TRF weights          [N_FEAT x N_LAGS x N_CHANS]
+%   TRF.(feature).r_full            prediction r per fold     [N_FOLD x N_CHANS]
+%   TRF.(feature).r_full_avg        mean r (folds x chans)    scalar
+%   % note: individual features also have permutation fields from above
+%   % (feat_cols, r_null, r_null_avg, r_corr, r_corr_avg) stored in the same sub-struct
 
 clc; clear; close all;
 
 %% - SETUP ----------------------------------------------------------------
 
-attn = 1;   % CHANGE: attended:1, unattended:2
+attn = 2;   % CHANGE: attended:1, unattended:2
 
 if attn == 1
     attn_label = 'Attended';
@@ -44,11 +53,11 @@ LAMBDAS     = 10.^(-6:6);
 MuR_STORIES = {'EngA|EngB', 'FraA|FraB'};
 
 % min circular shift > longest possible time lag
-MIN_SHIFT   = ceil(TMAX / 1000 * FS) + 1; % 61
+MIN_SHIFT = ceil(TMAX / 1000 * FS) + 1; % 61
 
-lags_samp   = floor(TMIN / 1000 * FS) : ceil(TMAX / 1000 * FS);
-LAGS        = lags_samp / FS * 1000; % -100:10:600 -> 71 lags
-N_LAGS      = numel(lags_samp);
+lags_samp = floor(TMIN / 1000 * FS) : ceil(TMAX / 1000 * FS);
+LAGS = lags_samp / FS * 1000; % -100:10:600 -> 71 lags
+N_LAGS = numel(lags_samp);
 
 % participant usage groups
 P_GROUPS = struct( ...
@@ -126,7 +135,7 @@ COLS    = [COLS_COMPOSITE, COLS_INDIV];     % corresponding feature columns
 %% - PATHS ----------------------------------------------------------------
 
 MAT_DIR = ['/Users/nadastojanovic/Development/mphil/1_mTRF/1b_mTRFready_' attn_label '_matfiles/'];
-OUTPUT  = '/Users/nadastojanovic/Development/mphil/1_mTRF/3_results/';
+OUTPUT  = ['/Users/nadastojanovic/Development/mphil/1_mTRF/3_results/' attn_label '/'];
 
 ssList = dir(fullfile(MAT_DIR, '*.mat'));
 %ssList = ssList(1); % uncomment when testing on a single file
@@ -168,6 +177,9 @@ parfor mat_i = 1:nID % requires Parallel Computing Toolbox
 
     fprintf('Processing: Participant %d | Condition: %s\n', Part, Cond);
 
+    %%% unattended AND MuR distractor -> env model only
+    is_mur = (attn == 2) && ismember(condition_str, {'EngA|EngB', 'FraA|FraB'});
+
     %%% initialise results struct
     TRF = struct();
     TRF.participant_ID = participant_id;
@@ -175,12 +187,24 @@ parfor mat_i = 1:nID % requires Parallel Computing Toolbox
     TRF.usage_group = UsageGroup;
     TRF.time_lags = LAGS;
 
-    %%% pre-allocate
+    %%% pre-allocate for full model results
     r_full = zeros(N_FOLD, N_CHANS);
     w_sum = zeros(N_FEAT, N_LAGS, N_CHANS);
     fold_lambdas = zeros(N_FOLD, 1);
     r_null_all = zeros(N_MODELS, N_PERM, N_CHANS, N_FOLD);
     r_null_full = zeros(N_PERM, N_CHANS, N_FOLD);
+
+    %%% pre-allocate for individual feature models results
+    N_INDIV = numel(MODELS_INDIV);
+    r_indiv = zeros(N_INDIV, N_FOLD, N_CHANS);
+    w_indiv_sum  = cell(1, N_INDIV);
+
+    for m = 1:N_INDIV
+        w_indiv_sum{m} = zeros(numel(COLS_INDIV{m}), N_LAGS, N_CHANS);
+    end
+
+    %%% pre-allocate for env model only (for unattended AND MuR distractor)
+    r_env_null = zeros(N_PERM, N_CHANS, N_FOLD);
 
     warning('off', 'MATLAB:nearlySingularMatrix');
     warning('off', 'MATLAB:singularMatrix');
@@ -191,90 +215,169 @@ parfor mat_i = 1:nID % requires Parallel Computing Toolbox
 
         [strain, rtrain, stest, rtest] = mTRFpartition(stimulusdata, eegdata, N_FOLD, testtrial);
 
-        %% full model
-
-        %%% lambda optimization
-        cv = mTRFcrossval(strain, rtrain, FS, MODEL_DIR, TMIN, TMAX, ...
-            LAMBDAS, 'zeropad', 0, 'verbose', 0);
-
-        [~, lambda_idx] = max(mean(mean(cv.r,3)));
-        lambda = LAMBDAS(lambda_idx);
-        fold_lambdas(fold_i) = lambda;
-
-        %%% train
-        model = mTRFtrain(strain, rtrain, FS, MODEL_DIR, TMIN, TMAX, ...
-            lambda, 'zeropad', 0, 'verbose', 0);
-
-        %%% store model weights
-        w_sum = w_sum + model.w;
-
-        %%% test
-        [~, mtrftest] = mTRFpredict(stest, rtest, model, ...
-            'zeropad', 0, 'verbose', 0);
-
-        %%% store per-fold r values
-        r_full(fold_i, :) = mtrftest.r;
-
-        %% control (null) shuffled model
-        % circular shift of all feature columns in test stimdata
-
-        r_null_full_fold = zeros(N_PERM, N_CHANS);
-        for p = 1:N_PERM
-            rnd_shft = randi([MIN_SHIFT, T - MIN_SHIFT]);
-
-            stest_perm = circshift(stest, rnd_shft, 1); % all cols
-            [~, testperm] = mTRFpredict(stest_perm, rtest, model, ...
+        if ~is_mur % attended OR (unattended AND non-MuR)
+            %% one full model
+            cv = mTRFcrossval(strain, rtrain, FS, MODEL_DIR, TMIN, TMAX, ...
+                LAMBDAS, 'zeropad', 0, 'verbose', 0);
+    
+            [~, lambda_idx] = max(mean(mean(cv.r,3)));
+            lambda = LAMBDAS(lambda_idx);
+            fold_lambdas(fold_i) = lambda;
+    
+            %%% train
+            model = mTRFtrain(strain, rtrain, FS, MODEL_DIR, TMIN, TMAX, ...
+                lambda, 'zeropad', 0, 'verbose', 0);
+    
+            %%% test
+            [~, mtrftest] = mTRFpredict(stest, rtest, model, ...
                 'zeropad', 0, 'verbose', 0);
+    
+            %%% store model weights
+            w_sum = w_sum + model.w;
+    
+            %%% store per-fold r values
+            r_full(fold_i, :) = mtrftest.r;
+    
+            %% control (null) shuffled model
+            % circular shift of all feature columns in test stimdata
+    
+            r_null_full_fold = zeros(N_PERM, N_CHANS);
+            for p = 1:N_PERM
+                rnd_shft = randi([MIN_SHIFT, T - MIN_SHIFT]);
+    
+                stest_perm = circshift(stest, rnd_shft, 1); % all cols
+                [~, testperm] = mTRFpredict(stest_perm, rtest, model, ...
+                    'zeropad', 0, 'verbose', 0);
+    
+                r_null_full_fold(p, :) = testperm.r;
+            end
+            r_null_full(:, :, fold_i) = r_null_full_fold;
+    
+            %% permute composite + individual features
+            % circular shift of current model's feature columns in test
+            % stimdata, test using the same pre-trained model ^
+    
+            for g = 1:N_MODELS   
+                for p = 1:N_PERM
+                    rnd_shft = randi([MIN_SHIFT, T - MIN_SHIFT]);
+    
+                    stest_perm = stest;
+                    stest_perm(:, COLS{g}) = circshift(stest(:, COLS{g}), rnd_shft, 1);
 
-            r_null_full_fold(p, :) = testperm.r;
-        end
-        r_null_full(:, :, fold_i) = r_null_full_fold;
+                    [~, testperm] = mTRFpredict(stest_perm, rtest, ...
+                        model, 'zeropad', 0, 'verbose', 0);
+    
+                    r_null_all(g, p, :, fold_i) = testperm.r;
+                end
+            end
+    
+            %% individual feature models
+            % train a model for each individual feature (artic fea and synt
+            % deps are one feature each) in order to obtain feature weights &
+            % inspect time course and topology for each feature
+            for m = 1:N_INDIV
+                strain_m = cellfun(@(x) x(:, COLS_INDIV{m}), strain, 'UniformOutput', false);
+                stest_m = stest(:, COLS_INDIV{m});
+            
+                cv_m = mTRFcrossval(strain_m, rtrain, FS, MODEL_DIR, ...
+                    TMIN, TMAX, LAMBDAS, 'zeropad', 0, 'fast', 1, 'verbose', 0);
+                [~, li] = max(mean(mean(cv_m.r, 3), 1));
+                lambda = LAMBDAS(li);
+            
+                model_m = mTRFtrain(strain_m, rtrain, FS, MODEL_DIR, ...
+                    TMIN, TMAX, lambda, 'zeropad', 0, 'verbose', 0);
+    
+                [~, test_m] = mTRFpredict(stest_m, rtest, model_m, ...
+                    'zeropad', 0, 'verbose', 0);
+            
+                r_indiv(m, fold_i, :) = test_m.r;
+                w_indiv_sum{m} = w_indiv_sum{m} + model_m.w;
+            end
 
-        %% composite + individual feature models
-        % circular shift of current model's feature columns in test
-        % stimdata, test using the same pre-trained model ^
+        else % unattended AND MuR distractor
+            %%% env model only
+            strain_env = cellfun(@(x) x(:, 1), strain, 'UniformOutput', false);
+            stest_env = stest(:, 1);
+    
+            cv_env = mTRFcrossval(strain_env, rtrain, FS, MODEL_DIR, ...
+                TMIN, TMAX, LAMBDAS, 'zeropad', 0, 'fast', 1, 'verbose', 0);
+            [~, li]   = max(mean(mean(cv_env.r, 3), 1));
+            lambda = LAMBDAS(li);
 
-        for g = 1:N_MODELS
-            gcols = COLS{g};
+            model_env = mTRFtrain(strain_env, rtrain, FS, MODEL_DIR, ...
+                TMIN, TMAX, lambda, 'zeropad', 0, 'verbose', 0);
 
+            [~, test_env] = mTRFpredict(stest_env, rtest, model_env, ...
+                'zeropad', 0, 'verbose', 0);
+    
+            r_indiv(1, fold_i, :) = test_env.r;
+            w_indiv_sum{1} = w_indiv_sum{1} + model_env.w;
+    
+            %%% env null
+            r_env_null_fold = zeros(N_PERM, N_CHANS);
             for p = 1:N_PERM
                 rnd_shft = randi([MIN_SHIFT, T - MIN_SHIFT]);
 
-                stest_perm = stest;
-                stest_perm(:, gcols) = circshift(stest(:, gcols), rnd_shft, 1);
-                [~, testperm] = mTRFpredict(stest_perm, rtest, model, ...
-                    'zeropad', 0, 'verbose', 0);
+                stest_env_p = circshift(stest_env, rnd_shft, 1);
+                [~, testperm] = mTRFpredict(stest_env_p, rtest, ...
+                    model_env, 'zeropad', 0, 'verbose', 0);
 
-                r_null_all(g, p, :, fold_i) = testperm.r;
+                r_env_null_fold(p, :) = testperm.r;
             end
+            r_env_null(:, :, fold_i) = r_env_null_fold;
 
         end
 
     end
 
-    %%% store full model results
-    TRF.full.weights = w_sum / N_FOLD;              % [N_FEAT x N_LAGS x N_CHAN]
-    TRF.full.lambdas = fold_lambdas;                % [N_FOLD x 1]
-
-    TRF.full.r_null = r_null_full;                  % [N_PERM x N_CHANS x N_FOLD]
-    TRF.full.r_full = r_full;                       % [N_FOLD x N_CHAN]
+    if ~is_mur % attended OR (unattended AND non-MuR)
+        %% store full model results
+        TRF.full.weights = w_sum / N_FOLD;              % [N_FEAT x N_LAGS x N_CHAN]
+        TRF.full.lambdas = fold_lambdas;                % [N_FOLD x 1]
     
-    TRF.full.r_null_avg = mean(r_null_full(:));     % scalar
-    TRF.full.r_full_avg = mean(r_full(:));          % scalar
+        TRF.full.r_null = r_null_full;                  % [N_PERM x N_CHANS x N_FOLD]
+        TRF.full.r_full = r_full;                       % [N_FOLD x N_CHAN]
+        
+        TRF.full.r_null_avg = mean(r_null_full(:));     % scalar
+        TRF.full.r_full_avg = mean(r_full(:));          % scalar
     
-    %%% store per model results
-    for g = 1:N_MODELS
-        gname  = MODELS{g};
-        TRF.(gname).feat_cols = COLS{g};                % e.g. [28, 29]
+        %% store per model results
+        for g = 1:N_MODELS
+            gname  = MODELS{g};
+            TRF.(gname).feat_cols = COLS{g};                % e.g. [28, 29]
+    
+            r_null_g = squeeze(r_null_all(g, :, :, :));     % [N_PERM x N_CHAN x N_FOLD]
+            r_corr = r_full - squeeze(mean(r_null_g, 1))';  % [N_FOLD x N_CHAN]
+    
+            TRF.(gname).r_null = r_null_g;                  % [N_PERM x N_CHAN x N_FOLD]
+            TRF.(gname).r_corr = r_corr;                    % [N_FOLD x N_CHAN]
+    
+            TRF.(gname).r_null_avg = mean(r_null_g(:));     % scalar
+            TRF.(gname).r_corr_avg = mean(r_corr(:));       % scalar
+        end
+    
+        %% store individual feature model results
+        for m = 1:N_INDIV
+            mname = MODELS_INDIV{m};
 
-        r_null_g = squeeze(r_null_all(g, :, :, :));     % [N_PERM x N_CHAN x N_FOLD]
-        r_corr = r_full - squeeze(mean(r_null_g, 1))';  % [N_FOLD x N_CHAN]
+            TRF.(mname).weights = w_indiv_sum{m} / N_FOLD;          % [N_FEAT x N_LAGS x N_CHANS]
+            TRF.(mname).r_full = squeeze(r_indiv(m, :, :));         % [N_FOLD x N_CHANS]
+            TRF.(mname).r_full_avg = mean(r_indiv(m, :, :), 'all'); % scalar
+        end
+    else % unattended AND MuR distractor
+        %% store env model + its null only
+        TRF.env.feat_cols = 1;
 
-        TRF.(gname).r_null = r_null_g;                  % [N_PERM x N_CHAN x N_FOLD]
-        TRF.(gname).r_corr = r_corr;                    % [N_FOLD x N_CHAN]
+        r_env = squeeze(r_indiv(1, :, :));                  % [N_FOLD x N_CHANS]
+        r_env_null_mean = squeeze(mean(r_env_null, 1))';    % [N_FOLD x N_CHANS]
+    
+        TRF.env.r_null = r_env_null;                        % [N_PERM x N_CHAN x N_FOLD]
+        TRF.env.r_null_avg = mean(r_env_null(:));           % scalar
 
-        TRF.(gname).r_null_avg = mean(r_null_g(:));     % scalar
-        TRF.(gname).r_corr_avg = mean(r_corr(:));       % scalar
+        TRF.env.weights = w_indiv_sum{1} / N_FOLD;          % [N_FEAT x N_LAGS x N_CHAN]
+
+        TRF.env.r_full = r_env;                             % [N_FOLD x N_CHAN]
+        TRF.env.r_full_avg = mean(r_env(:));                % scalar
     end
 
 %% - SAVE OUTPUT MAT FILE -------------------------------------------------
