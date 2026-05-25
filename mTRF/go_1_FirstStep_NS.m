@@ -20,18 +20,18 @@ end
 %% PATHS
 
 %%% EEG data
-path_data  = ['/Users/nadastojanovic/Development/mphil/1_mTRF/0a_EEGdata_' attn_label '_v1to12/'];
+path_data  = ['/Users/nadastojanovic/Development/mphil/1_data/a_EEGdata_' attn_label '_v1to12/'];
 
 %%% stim feature mats
-path_env    = '/Users/nadastojanovic/Development/mphil/0_speech_envelope/';
-path_onset  = '/Users/nadastojanovic/Development/mphil/0_morphology/';
-path_artic  = '/Users/nadastojanovic/Development/mphil/0_articulatory_features/';
-path_phono  = '/Users/nadastojanovic/Development/mphil/0_phonotactic_prob/';
-path_sem    = '/Users/nadastojanovic/Development/mphil/0_word_surprisal_entropy/';
-path_synt   = '/Users/nadastojanovic/Development/mphil/0_syntax/';
+path_env    = '/Users/nadastojanovic/Development/mphil/1_data/b_speech_envelope/';
+path_onset  = '/Users/nadastojanovic/Development/mphil/1_data/b_morphology/';
+path_artic  = '/Users/nadastojanovic/Development/mphil/1_data/b_articulatory_features/';
+path_phono  = '/Users/nadastojanovic/Development/mphil/1_data/b_phonotactic_prob/';
+path_sem    = '/Users/nadastojanovic/Development/mphil/1_data/b_word_surprisal_entropy/';
+path_synt   = '/Users/nadastojanovic/Development/mphil/1_data/b_syntax/';
 
 %%% output (mTRFready) matfiles
-path_mat   = ['/Users/nadastojanovic/Development/mphil/1_mTRF/1b_mTRFready_' attn_label '_matfiles/'];
+path_mat   = ['/Users/nadastojanovic/Development/mphil/2_mTRF/2_matfiles/' attn_label '_new/'];
 
 %% STIM FEATURES
 
@@ -84,7 +84,7 @@ load([path_synt 'NS_syntactic.mat'])
 
 ssList = uipickfiles('FilterSpec', [path_data, '*.set'], ...
     'Prompt', 'Select the preprocessed .set files');
-
+% ssList = ssList(1); % comment if not testing
 nID = size(ssList,2);
 
 %% EXP CONDITIONS
@@ -203,31 +203,41 @@ for cond_idx = 1:numel(conditions)
         [sem_glue, ~]       = gluedata(wav_match_sem,   data_match, zeropadding);
         [synt_glue,  ~]     = gluedata(wav_match_synt,  data_match, zeropadding);
 
-        % final column order:
-        %   1:      speech envelope
-        %   2:      phoneme onsets
-        %   3:      inflectional morphology
-        %   4:      word Onsets
-        %   5 - 26: articulatory features (22 cols)
-        %   27:     word Frequency
-        %   28:     phonotactic probability (positional segment frequency)
-        %   29:     phonotactic probability (biphoneme frequency)
-        %   30:     phoneme cohort-based surprisal
-        %   31:     phoneme cohort-based entropy
-        %   32:     word surprisal
-        %   33:     word entropy
-        %   34:     syntactic depth
-        %   35:     open dependencies
-        %   36:     remaining open dependencies
-        %   37:     closed dependencies
+        %%% collapse articulatory features
+        % - collapses panphon -1 to 0
+        % - performs a log sum of all 22 features
+        % - multiplies by phoneme onset vector so as to transform from
+        %   step function -> impulse vector
+        artic_logsum = log1p(sum(max(0, artic_glue), 2)) .* onset_glue(:, 1); 
+
+        %%% collapse syntactic dependencies
+        synt_depth = synt_glue(:, 1);
+        synt_deps_logsum = log1p(sum(synt_glue(:, 2:4), 2));
+
+        % final column order (14 cols total):
+        %   1:  speech envelope
+        %   2:  phoneme onsets
+        %   3:  inflectional morphology
+        %   4:  word onsets
+        %   5:  articulatory features (log-compressed sum)
+        %   6:  word frequency
+        %   7:  phonotactic probability (positional segment frequency)
+        %   8:  phonotactic probability (biphoneme frequency)
+        %   9:  phoneme cohort-based surprisal
+        %   10: phoneme cohort-based entropy
+        %   11: word surprisal
+        %   12: word entropy
+        %   13: syntactic depth
+        %   14: syntactic dependencies (log-compressed sum)
 
         stimulusdata = [...
-            env_glue    ...
-            onset_glue  ...
-            artic_glue  ...
-            phono_glue  ...
-            sem_glue    ...
-            synt_glue   ...
+            env_glue        ...  % 1
+            onset_glue      ...  % 2-4
+            artic_logsum    ...  % 5
+            phono_glue      ...  % 6-10
+            sem_glue        ...  % 11-12
+            synt_depth      ...  % 13
+            synt_deps_logsum ... % 14
         ];
 
         %%% z-score stim features (recommended by Crosse et al. papers)

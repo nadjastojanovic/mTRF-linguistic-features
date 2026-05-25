@@ -7,11 +7,11 @@
 %   TRF.usage_group                 string                    'High' | 'Low' | 'No'
 %   TRF.time_lags                   time lags ms              [1 x N_LAGS]
 %
-%   ── Full model (all 37 features jointly) ──────────────────────────────────
+%   ── Full model (all 12 features jointly) ──────────────────────────────────
 %   TRF.full.weights                mean TRF weights          [N_FEAT x N_LAGS x N_CHANS]
 %   TRF.full.lambdas                optimal lambda per fold   [N_FOLD x 1]
-%   TRF.full.r_full                 prediction r per fold     [N_FOLD x N_CHANS]
-%   TRF.full.r_full_avg             mean r (folds x chans)    scalar
+%   TRF.full.r                      prediction r per fold     [N_FOLD x N_CHANS]
+%   TRF.full.r_avg                  mean r (folds x chans)    scalar
 %   TRF.full.r_null                 null r (all cols shifted) [N_PERM x N_CHANS x N_FOLD]
 %   TRF.full.r_null_avg             mean null r               scalar
 %
@@ -24,8 +24,8 @@
 %
 %   ── Individual feature models (solo model per feature) ────────────────────
 %   TRF.(feature).weights           mean TRF weights          [N_FEAT x N_LAGS x N_CHANS]
-%   TRF.(feature).r_full            prediction r per fold     [N_FOLD x N_CHANS]
-%   TRF.(feature).r_full_avg        mean r (folds x chans)    scalar
+%   TRF.(feature).r                 prediction r per fold     [N_FOLD x N_CHANS]
+%   TRF.(feature).r_avg             mean r (folds x chans)    scalar
 %   % note: individual features also have permutation fields from above
 %   % (feat_cols, r_null, r_null_avg, r_corr, r_corr_avg) stored in the same sub-struct
 
@@ -70,63 +70,51 @@ P_GROUPS_NAMES = fieldnames(P_GROUPS);
 
 %% - MODELS ---------------------------------------------------------------
 
-% final column order:
-%   1:      speech envelope
-%   2:      phoneme onsets
-%   3:      inflectional morphology
-%   4:      word onsets
-%   5–26:   articulatory features (22 cols)
-%   27:     word frequency
-%   28:     phonotactic probability (positional segment frequency)
-%   29:     phonotactic probability (biphoneme frequency)
-%   30:     phoneme cohort-based surprisal
-%   31:     phoneme cohort-based entropy
-%   32:     word surprisal
-%   33:     word entropy
-%   34:     syntactic depth
-%   35:     open dependencies
-%   36:     remaining open dependencies
-%   37:     closed dependencies
+% final column order (12 cols total):
+%   1:  speech envelope
+%   2:  phoneme onsets
+%   3:  inflectional morphology
+%   4:  word onsets
+%   5:  articulatory complexity
+%   6:  word frequency
+%   7:  phoneme frequency
+%   8:  phoneme surprisal
+%   9:  phoneme entropy
+%   10: word surprisal
+%   11: word entropy
+%   12: syntactic complexity
 
 %%% composite models
 MODELS_COMPOSITE = {...
-    'phonotactic',  ... % pos seg freq + bi freq
-    'cohort_based', ... % phon surp + phon ent
-    'phoneme_level',... % phonotactic + cohort
-    'semantic',     ... % word surp + word ent
-    'syntactic',    ... % syntactic depth + dep counts
-    'rule_based',   ... % inflectional morph + syntactic
-    'word_level',   ... % semantic + syntactic
-    'linguistic' }; ... % everything exc. (env + artic + phon onsets + word onsets + word freq)
-           
-COLS_COMPOSITE  = { ...
-    28:29,          ... % phonotactic
-    30:31,          ... % cohort_based
-    28:31,          ... % phoneme_level
-    32:33,          ... % semantic
-    34:37,          ... % syntactic
-    [3, 34:37],     ... % rule_based
-    32:37,          ... % word_level
-    [3, 28:37] };   ... % linguistic
+    'phonological', ... % phon onsets + artic + phon freq + phon surp + phon ent
+    'lexical',      ... % word onsets + word freq + word surp + word ent
+    'syntactic',    ... % morph + synt complexity
+    'linguistic',   ... % lexical + syntactic
+    'full_no_env'}; ... % full model exc. speech envelope
+
+COLS_COMPOSITE  = {              ...
+    [2, 5, 7, 8, 9],             ... % phonological
+    [4, 6, 10, 11],              ... % lexical
+    [3, 12],                     ... % syntactic
+    [3, 4, 6, 10, 11, 12],       ... % linguistic
+    2:12 };                          % full model exc. speech envelope
             
 %%% individual feature models
 MODELS_INDIV = { ...
-    'env',           ...  % speech envelope
-    'phon_onsets',   ...  % phoneme onsets
-    'morph',         ...  % inflectional morphology
-    'word_onsets',   ...  % word onsets
-    'artic',         ...  % articulatory features (one group)
-    'word_freq',     ...  % word frequency
-    'pos_seg_freq',  ...  % phonotactic prob (positional segment frequency)
-    'bi_freq',       ...  % phonotactic prob (biphoneme frequency)
-    'phon_surp',     ...  % phoneme surprisal
-    'phon_ent',      ...  % phoneme entropy
-    'word_surp',     ...  % word surprisal
-    'word_ent',      ...  % word entropy
-    'synt_depth',    ...  % syntactic depth
-    'synt_deps'};         % dependency counts (one group)
+    'env',          ...  % speech envelope
+    'phon_onsets',  ...  % phoneme onsets
+    'morph',        ...  % inflectional morphology
+    'word_onsets',  ...  % word onsets
+    'artic',        ...  % articulatory complexity
+    'word_freq',    ...  % word frequency
+    'phon_freq',    ...  % phonotactic prob (positional segment frequency)
+    'phon_surp',    ...  % phoneme surprisal
+    'phon_ent',     ...  % phoneme entropy
+    'word_surp',    ...  % word surprisal
+    'word_ent',     ...  % word entropy
+    'synt'};             % syntactic complexity
 
-COLS_INDIV = {1, 2, 3, 4, 5:26, 27, 28, 29, 30, 31, 32, 33, 34, 35:37};
+COLS_INDIV = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
 
 %%% models used for ~(unattended && MuR)
 MODELS  = [MODELS_COMPOSITE, MODELS_INDIV]; % model names
@@ -134,8 +122,8 @@ COLS    = [COLS_COMPOSITE, COLS_INDIV];     % corresponding feature columns
 
 %% - PATHS ----------------------------------------------------------------
 
-MAT_DIR = ['/Users/nadastojanovic/Development/mphil/1_mTRF/1b_mTRFready_' attn_label '_matfiles/'];
-OUTPUT  = ['/Users/nadastojanovic/Development/mphil/1_mTRF/3_results/' attn_label '/'];
+MAT_DIR = ['/Users/nadastojanovic/Development/mphil/2_mTRF/2_matfiles/' attn_label '_new/'];
+OUTPUT  = ['/Users/nadastojanovic/Development/mphil/2_mTRF/4_results/' attn_label '_new_new/'];
 
 ssList = dir(fullfile(MAT_DIR, '*.mat'));
 %ssList = ssList(1); % uncomment when testing on a single file
@@ -156,7 +144,7 @@ parfor mat_i = 1:nID % requires Parallel Computing Toolbox
     eegdata = tmp.eegdata;
     stimulusdata = tmp.stimulusdata;
     T = size(eegdata, 1);
-    N_FEAT = size(stimulusdata, 2); % 37
+    N_FEAT = size(stimulusdata, 2); % 12
 
     %%% parse filename i.e. NS_mTRFready_101_A_EngA|EngB.mat
     [~, basename, ~] = fileparts(filename);
@@ -201,6 +189,14 @@ parfor mat_i = 1:nID % requires Parallel Computing Toolbox
 
     for m = 1:N_INDIV
         w_indiv_sum{m} = zeros(numel(COLS_INDIV{m}), N_LAGS, N_CHANS);
+    end
+
+    %%% pre-allocate for individual feature models results
+    N_COMP = numel(MODELS_COMPOSITE);
+    r_comp = zeros(N_COMP, N_FOLD, N_CHANS);
+    w_comp_sum = cell(1, N_COMP);
+    for c = 1:N_COMP
+        w_comp_sum{c} = zeros(numel(COLS_COMPOSITE{c}), N_LAGS, N_CHANS);
     end
 
     %%% pre-allocate for env model only (for unattended AND MuR distractor)
@@ -270,17 +266,40 @@ parfor mat_i = 1:nID % requires Parallel Computing Toolbox
                     r_null_all(g, p, :, fold_i) = testperm.r;
                 end
             end
-    
-            %% individual feature models
-            % train a model for each individual feature (artic fea and synt
-            % deps are one feature each) in order to obtain feature weights &
-            % inspect time course and topology for each feature
+
+            %% individually trained models
+            % train a model for each individual feature & permute it out
+            % of the full model to get its unique contribution
+
+            %%% COMPOSITE MODELS
+            for c = 1:N_COMP
+                strain_c = cellfun(@(x) x(:, COLS_COMPOSITE{c}), strain, 'UniformOutput', false);
+                stest_c = stest(:, COLS_COMPOSITE{c});
+            
+                cv_c = mTRFcrossval(strain_c, rtrain, FS, MODEL_DIR, ...
+                    TMIN, TMAX, LAMBDAS, ...
+                    'zeropad', 0, 'fast', 1, 'verbose', 0);
+                [~, li] = max(mean(mean(cv_c.r, 3), 1));
+                lambda_c = LAMBDAS(li);
+            
+                model_c = mTRFtrain(strain_c, rtrain, FS, MODEL_DIR, ...
+                    TMIN, TMAX, lambda_c, 'zeropad', 0, 'verbose', 0);
+            
+                [~, test_c] = mTRFpredict(stest_c, rtest, model_c, ...
+                    'zeropad', 0, 'verbose', 0);
+            
+                r_comp(c, fold_i, :) = test_c.r;
+                w_comp_sum{c} = w_comp_sum{c} + model_c.w;
+            end
+   
+            %%% SOLO FEATURE MODELS
             for m = 1:N_INDIV
                 strain_m = cellfun(@(x) x(:, COLS_INDIV{m}), strain, 'UniformOutput', false);
                 stest_m = stest(:, COLS_INDIV{m});
             
                 cv_m = mTRFcrossval(strain_m, rtrain, FS, MODEL_DIR, ...
-                    TMIN, TMAX, LAMBDAS, 'zeropad', 0, 'fast', 1, 'verbose', 0);
+                    TMIN, TMAX, LAMBDAS, ...
+                    'zeropad', 0, 'fast', 1, 'verbose', 0);
                 [~, li] = max(mean(mean(cv_m.r, 3), 1));
                 lambda = LAMBDAS(li);
             
@@ -336,10 +355,10 @@ parfor mat_i = 1:nID % requires Parallel Computing Toolbox
         TRF.full.lambdas = fold_lambdas;                % [N_FOLD x 1]
     
         TRF.full.r_null = r_null_full;                  % [N_PERM x N_CHANS x N_FOLD]
-        TRF.full.r_full = r_full;                       % [N_FOLD x N_CHAN]
+        TRF.full.r = r_full;                            % [N_FOLD x N_CHAN]
         
         TRF.full.r_null_avg = mean(r_null_full(:));     % scalar
-        TRF.full.r_full_avg = mean(r_full(:));          % scalar
+        TRF.full.r_avg = mean(r_full(:));               % scalar
     
         %% store per model results
         for g = 1:N_MODELS
@@ -355,29 +374,37 @@ parfor mat_i = 1:nID % requires Parallel Computing Toolbox
             TRF.(gname).r_null_avg = mean(r_null_g(:));     % scalar
             TRF.(gname).r_corr_avg = mean(r_corr(:));       % scalar
         end
+
+        %% store individually trained composite model results
+        for c = 1:N_COMP
+            cname = MODELS_COMPOSITE{c};
+
+            TRF.(cname).weights = w_comp_sum{c} / N_FOLD;
+            TRF.(cname).r = squeeze(r_comp(c, :, :));
+            TRF.(cname).r_avg   = mean(r_comp(c, :, :), 'all');
+        end
     
-        %% store individual feature model results
+        %% store individually trained solo feature model results
         for m = 1:N_INDIV
             mname = MODELS_INDIV{m};
 
-            TRF.(mname).weights = w_indiv_sum{m} / N_FOLD;          % [N_FEAT x N_LAGS x N_CHANS]
-            TRF.(mname).r_full = squeeze(r_indiv(m, :, :));         % [N_FOLD x N_CHANS]
-            TRF.(mname).r_full_avg = mean(r_indiv(m, :, :), 'all'); % scalar
+            TRF.(mname).weights = w_indiv_sum{m} / N_FOLD;     % [N_FEAT x N_LAGS x N_CHANS]
+            TRF.(mname).r = squeeze(r_indiv(m, :, :));         % [N_FOLD x N_CHANS]
+            TRF.(mname).r_avg = mean(r_indiv(m, :, :), 'all'); % scalar
         end
     else % unattended AND MuR distractor
         %% store env model + its null only
         TRF.env.feat_cols = 1;
 
         r_env = squeeze(r_indiv(1, :, :));                  % [N_FOLD x N_CHANS]
-        r_env_null_mean = squeeze(mean(r_env_null, 1))';    % [N_FOLD x N_CHANS]
     
         TRF.env.r_null = r_env_null;                        % [N_PERM x N_CHAN x N_FOLD]
         TRF.env.r_null_avg = mean(r_env_null(:));           % scalar
 
         TRF.env.weights = w_indiv_sum{1} / N_FOLD;          % [N_FEAT x N_LAGS x N_CHAN]
 
-        TRF.env.r_full = r_env;                             % [N_FOLD x N_CHAN]
-        TRF.env.r_full_avg = mean(r_env(:));                % scalar
+        TRF.env.r = r_env;                             % [N_FOLD x N_CHAN]
+        TRF.env.r_avg = mean(r_env(:));                % scalar
     end
 
 %% - SAVE OUTPUT MAT FILE -------------------------------------------------
